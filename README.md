@@ -25,98 +25,64 @@ Specter's API is contained in a single, well-documented file: [specter.cljx](htt
 
 You can ask questions about Specter by [opening an issue](https://github.com/nathanmarz/specter/issues?utf8=%E2%9C%93&q=is%3Aissue+label%3Aquestion+) on Github. 
 
-# Examples
+# Guide
 
-Here's how to increment all the even values for :a keys in a sequence of maps:
+## Basics
+
+Specter's query and transformation tools, when used at the most basic level, feel similar to Clojure's `get-in`, `assoc-in`, and `update-in`.
 
 ```clojure
 user> (use 'com.rpl.specter)
-user> (transform [ALL :a even?]
-              inc
-              [{:a 1} {:a 2} {:a 4} {:a 3}])
-[{:a 1} {:a 3} {:a 5} {:a 3}]
+user> (select [:a :b] {:a {:b 1}})
+[1]
+user> (setval [:a :b] "hello world" {:a {:b 1}})
+{:a {:b "hello world"}}
+user> (transform [:a :b] inc {:a {:b 1}})
+{:a {:b 2}}
 ```
 
-Here's how to retrieve every number divisible by 3 out of a sequence of sequences:
-```clojure
-user> (select [ALL ALL #(= 0 (mod % 3))]
-              [[1 2 3 4] [] [5 3 2 18] [2 4 6] [12]])
-[3 3 18 6 12]
-```
+In each example, we are passing in a data structure and a query that finds a value deep inside that structure. In the case of `setval` and `transform`, we are also specifying how to do something to that nested value and keep the rest of the data structure intact. This is pretty simple so far.
 
-Here's how to increment the last odd number in a sequence:
+That query is also known as a *path* which contains one or more *navigators*. A navigator doesn't just have to be a keyword. For example, the navigator `ALL` will return or update all values inside a list or a vector.
 
 ```clojure
-user> (transform [(filterer odd?) LAST]
-              inc
-              [2 1 3 6 9 4 8])
-[2 1 3 6 10 4 8]
+user> (def bob {:name "Bob Jones",
+                :pets [{:type :dog, :name "Rover"}
+                       {:type :cat, :name "Coco"}
+                       {:type :dog, :name "Max"}]})
+user> (select [:pets ALL :name] bob)
+["Rover" "Coco" "Max"]
+user> (transform [:pets ALL :name] #(str % " Jones") bob)
+{:name "Bob Jones",
+ :pets [{:type :dog, :name "Rover Jones"}
+        {:type :cat, :name "Coco Jones"}
+        {:type :dog, :name "Max Jones"}]}
 ```
 
-Here's how to increment all the odd numbers between indexes 1 (inclusive) and 4 (exclusive):
+In this example, we navigate to the collection under the key `:pets`, then traverse that sequence with `ALL`, and for each of those values (which are pet maps) we navigate to its `:name`.
+
+Navigators can not only expand a query but also pare it down. Let's find the names of all of Bob's dogs.
 
 ```clojure
-user> (transform [(srange 1 4) ALL odd?] inc [0 1 2 3 4 5 6 7])
-[0 2 2 4 4 5 6 7]
+user> (select [:pets ALL (pred #(= (:type %) :dog)) :name] bob)
+["Rover" "Max"]
 ```
 
-Here's how to replace the subsequence from index 2 to 4 with [:a :b :c :d :e]:
+Finally, let's add the last name Jones (like the previous example) but only to the dogs:
 
 ```clojure
-user> (setval (srange 2 4) [:a :b :c :d :e] [0 1 2 3 4 5 6 7 8 9])
-[0 1 :a :b :c :d :e 4 5 6 7 8 9]
+user> (transform [:pets ALL (pred #(= (:type %) :dog)) :name]
+                 #(str % " Jones")
+                 bob)
+{:name "Bob Jones",
+ :pets [{:type :dog, :name "Rover Jones"}
+        {:type :cat, :name "Coco"}
+        {:type :dog, :name "Max Jones"}]}
 ```
 
-Here's how to concatenate the sequence [:a :b] to every nested sequence of a sequence:
+A Specter-less implementation of that problem (left as an exercise to the reader) would likely take more thought and end up a more complex solution than necessary. Specter's power over Clojure's built-in data functions comes from its vast selection of navigators that allow more succinct and creative ways to manipulate immutable data. And as we will see later, Specter is also more performant.
 
-```clojure
-user> (setval [ALL END] [:a :b] [[1] '(1 2) [:c]])
-[[1 :a :b] (1 2 :a :b) [:c :a :b]]
-```
-
-Here's how to get all the numbers out of a map, no matter how they're nested:
-
-```clojure
-user> (select (walker number?)
-              {2 [1 2 [6 7]] :a 4 :c {:a 1 :d [2 nil]}})
-[2 1 2 1 2 6 7 4]
-```
-
-Here's now to navigate via non-keyword keys:
-
-```clojure
-user> (select [(keypath "a") (keypath "b")]
-              {"a" {"b" 10}})
-[10]
-```
-
-Here's how to reverse the positions of all even numbers between indexes 4 and 11:
-
-```clojure
-user> (transform [(srange 4 11) (filterer even?)]
-              reverse
-              [0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15])
-[0 1 2 3 10 5 8 7 6 9 4 11 12 13 14 15]
-```
-
-Here's how to decrement every value in a map:
-
-```clojure
-user> (transform [ALL LAST]
-              dec
-              {:a 1 :b 3})
-{:b 2 :a 0}
-```
-
-Here's how to append [:c :d] to every subsequence that has at least two even numbers:
-```clojure
-user> (setval [ALL
-               (selected? (filterer even?) (view count) #(>= % 2))
-               END]
-              [:c :d]
-              [[1 2 3 4 5 6] [7 0 -1] [8 8] []])
-[[1 2 3 4 5 6 :c :d] [7 0 -1] [8 8 :c :d] []]
-```
+## Collecting
 
 When doing more involved transformations, you often find you lose context when navigating deep within a data structure and need information "up" the data structure to perform the transformation. Specter solves this problem by allowing you to collect values during navigation to use in the transform function. Here's an example which transforms a sequence of maps by adding the value of the :b key to the value of the :a key, but only if the :a key is even:
 
